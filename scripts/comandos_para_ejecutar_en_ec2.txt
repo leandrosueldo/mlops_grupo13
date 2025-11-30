@@ -1,0 +1,101 @@
+# Comandos para ejecutar DIRECTAMENTE en EC2
+# Copia y pega estos comandos en tu sesión SSH de EC2
+
+# Activar entorno
+source ~/airflow-env/bin/activate
+export AIRFLOW_HOME=~/airflow
+
+# Detener procesos antiguos
+echo "Deteniendo procesos antiguos..."
+pkill -9 -f "airflow webserver" 2>/dev/null || true
+pkill -9 -f "airflow scheduler" 2>/dev/null || true
+pkill -9 -f "gunicorn.*airflow" 2>/dev/null || true
+sleep 3
+
+# Verificar que estén detenidos
+REMAINING=$(ps aux | grep -E "(airflow|gunicorn)" | grep -v grep | wc -l)
+if [ "$REMAINING" -gt 0 ]; then
+    echo "Forzando detención..."
+    pkill -9 -f airflow 2>/dev/null || true
+    sleep 2
+fi
+
+echo "✅ Procesos detenidos"
+echo ""
+
+# Configurar variables
+export AIRFLOW__CORE__LOAD_EXAMPLES=False
+export AIRFLOW__CORE__DAGS_FOLDER=~/airflow/dags
+
+# Verificar configuración
+if [ ! -f $AIRFLOW_HOME/airflow.cfg ]; then
+    echo "Inicializando Airflow..."
+    airflow db init
+fi
+
+echo "Iniciando webserver..."
+cd $AIRFLOW_HOME
+nohup airflow webserver -p 8080 > /tmp/airflow_webserver.log 2>&1 &
+WEBSERVER_PID=$!
+echo "Webserver iniciado (PID: $WEBSERVER_PID)"
+sleep 15
+
+# Verificar webserver
+if ps aux | grep -q "[g]unicorn.*airflow"; then
+    echo "✅ Webserver iniciado correctamente"
+    ps aux | grep "[g]unicorn.*airflow" | grep -v grep | head -1
+else
+    echo "❌ Error iniciando webserver"
+    echo "Últimas líneas del log:"
+    tail -20 /tmp/airflow_webserver.log
+    exit 1
+fi
+
+# Verificar puerto
+echo ""
+echo "Verificando puerto 8080..."
+if ss -tlnp 2>/dev/null | grep -q ":8080"; then
+    echo "✅ Puerto 8080 está escuchando"
+    ss -tlnp 2>/dev/null | grep 8080
+elif netstat -tlnp 2>/dev/null | grep -q ":8080"; then
+    echo "✅ Puerto 8080 está escuchando"
+    netstat -tlnp 2>/dev/null | grep 8080
+else
+    echo "⚠️  Puerto 8080 aún no está escuchando (puede tardar unos segundos más)"
+fi
+
+echo ""
+echo "Iniciando scheduler..."
+nohup airflow scheduler > /tmp/airflow_scheduler.log 2>&1 &
+SCHEDULER_PID=$!
+echo "Scheduler iniciado (PID: $SCHEDULER_PID)"
+sleep 10
+
+# Verificar scheduler
+if ps aux | grep -q "[a]irflow scheduler"; then
+    echo "✅ Scheduler iniciado correctamente"
+    ps aux | grep "[a]irflow scheduler" | grep -v grep | head -1
+else
+    echo "❌ Error iniciando scheduler"
+    echo "Últimas líneas del log:"
+    tail -20 /tmp/airflow_scheduler.log
+    exit 1
+fi
+
+echo ""
+echo "=========================================="
+echo "✅ CONFIGURACIÓN COMPLETADA"
+echo "=========================================="
+echo ""
+echo "Verificando estado final..."
+ps aux | grep -E "(airflow|gunicorn)" | grep -v grep | head -5
+echo ""
+PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "18.118.31.28")
+echo "📌 Accede a: http://$PUBLIC_IP:8080"
+echo "   Usuario: admin"
+echo "   Contraseña: admin"
+echo ""
+echo "⏳ Espera 20-30 segundos y luego abre el navegador"
+echo ""
+
+
